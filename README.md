@@ -170,6 +170,5 @@ curl http://localhost:5000/dry-run/progress/<job_id>
 
 * No data is deleted in dry-run mode.
 * App runs non-blocking jobs in background using Python threads.
-* Does **not** use Azure Table Storage. All logs are local file-based.
 
 ---
