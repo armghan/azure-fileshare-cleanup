@@ -10,21 +10,28 @@ A Flask-based API to:
 
 ## 🔧 Setup
 
-### 1. Install Requirements
+### 1. Create virtual environment
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+### 2. Install Requirements
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure `.env`
+### 3. Configure `.env`
 ```bash
 cp .env.example .env
 ```
 
 Fill in your Azure Storage connection strings and table name.
 
-### 3. Run the API
+### 4. Run the API
 ```bash
 python app.py
+```
 
 ## 🧪 Cleanup API
 
