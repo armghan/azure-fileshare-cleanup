@@ -1,73 +1,175 @@
-# Azure File Share Cleanup API
+# Azure Fileshare Cleanup API
 
-A Flask-based API to:
-- Clean Azure File Share files older than 30 days
-- Remove date-based folders (e.g., `2024-01-01`) older than 30 days
-- Exclude config directories and specific folders
-- Track progress using Job ID
-- Write deletion logs to Azure Table Storage in a separate account
-- Supports dry-run to simulate deletions
+This project provides a Flask-based REST API to **list or delete old files and directories** in an Azure File Share that are older than a configurable retention period. It supports both **dry-run** (preview) and actual deletion, with **logging and progress tracking**.
 
-## 🔧 Setup
+---
 
-### 1. Create virtual environment
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+## 🔧 Features
+
+* Cleanup files/directories older than `RETENTION_DAYS` (default: 30)
+* Dry-run mode to preview what would be deleted
+* Separate log files for:
+
+  * Deleted items (`logs/deleted.log`)
+  * Dry-run candidates (`logs/dryrun.log`)
+* Asynchronous background processing
+* Simple job tracking via `/progress` endpoints
+* Configurable log level and retention using `.env`
+
+---
+
+## 📁 Directory Structure
+
+```
+python-cleanup-api/
+│
+├── app.py
+├── cleanup_worker.py
+├── dryrun_worker.py
+├── audit_logger.py
+├── config.py
+├── dryrun_tracker.py
+├── progress_tracker.py
+├── requirements.txt
+├── .env
+├── .gitignore
+├── README.md
+└── logs/
+    ├── deleted.log
+    └── dryrun.log
 ```
 
-### 2. Install Requirements
+---
+
+## 📦 Setup
+
 ```bash
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 3. Configure `.env`
-```bash
-cp .env.example .env
+---
+
+## ⚙️ .env Configuration
+
+Create a `.env` file in the root directory:
+
+```
+AZURE_FILES_CONN_STRING=your-fileshare-connection-string
+LOG_LEVEL=INFO
+RETENTION_DAYS=30
 ```
 
-Fill in your Azure Storage connection strings and table name.
+* `AZURE_FILES_CONN_STRING`: Connection string to your Azure File Share storage account.
+* `LOG_LEVEL`: `DEBUG`, `INFO`, `WARNING`, `ERROR`
+* `RETENTION_DAYS`: Number of days to retain files/directories. Older data will be deleted.
 
-### 4. Run the API
+---
+
+## 🚀 Running the API
+
 ```bash
 python app.py
 ```
 
-## 🧪 Cleanup API
+Default port is `5000`.
 
-### Start Cleanup
-```http
-POST /start-cleanup/fileshare
-{
-  "share_name": "your-fileshare-name"
-}
+---
+
+## 📡 API Endpoints
+
+### 1. Start Cleanup
+
+```bash
+curl -X POST http://localhost:5000/start-cleanup/fileshare \
+  -H "Content-Type: application/json" \
+  -d '{"share_name": "your-fileshare-name"}'
 ```
 
-### Check Progress
-```http
-GET /progress/<job_id>
+**Response**:
+
+```json
+{ "job_id": "xxx-yyy-zzz" }
 ```
 
-## 🧪 Dry Run API
+---
 
-### Start Dry Run
-```http
-POST /dry-run/fileshare
-{
-  "share_name": "your-fileshare-name"
-}
+### 2. Start Dry Run
+
+```bash
+curl -X POST http://localhost:5000/dry-run/fileshare \
+  -H "Content-Type: application/json" \
+  -d '{"share_name": "your-fileshare-name"}'
 ```
 
-### Check Dry Run Progress
-```http
-GET /dry-run/progress/<job_id>
+**Response**:
+
+```json
+{ "job_id": "xxx-yyy-zzz", "message": "Dry run started" }
 ```
 
-## 📬 Logs
-- All actual deletions are logged to Azure Table Storage in a separate account
-- Dry runs do not perform deletions, only simulate and return paths
+---
 
-## ✅ Exclusions
-- Paths containing "config"
-- Folders: Outbound, ConfigBackup, certificates
-- Skips recent folders (under 30 days)
+### 3. Check Cleanup Progress
+
+```bash
+curl http://localhost:5000/progress/<job_id>
+```
+
+**Response**:
+
+```json
+{ "progress": 80, "deleted": 120, "status": "pending" }
+```
+
+---
+
+### 4. Check Dry Run Progress
+
+```bash
+curl http://localhost:5000/dry-run/progress/<job_id>
+```
+
+**Response**:
+
+```json
+{ "progress": 90, "total_candidates": 145, "status": "pending" }
+```
+
+---
+
+## 📜 Logs
+
+* `logs/deleted.log`: Contains entries of actually deleted items.
+* `logs/dryrun.log`: Contains dry-run candidate items (what would be deleted).
+* Console logs are controlled using `.env` variable `LOG_LEVEL`.
+
+---
+
+## ✅ Example Use Case
+
+* Identify and clean up Azure File Share structures that are older than N days.
+* Use dry-run to simulate and verify deletions.
+* Track all deletions and dry-run evaluations via log files.
+
+---
+
+## 🧪 Tested With
+
+* Python 3.8+
+* `azure-storage-file-share`
+* Flask 3.x
+
+---
+
+## 🛠 Notes
+
+* No data is deleted in dry-run mode.
+* App runs non-blocking jobs in background using Python threads.
+* Does **not** use Azure Table Storage. All logs are local file-based.
+
+---
