@@ -1,29 +1,45 @@
-from azure.data.tables import TableServiceClient
-from config import AZURE_AUDIT_CONN_STRING, AUDIT_TABLE_NAME
-from datetime import datetime
-import uuid
+import os
+from datetime import datetime, timedelta, timezone
+from config import RETENTION_DAYS
+import logging
 
 EXCLUDED_DIRS = {"Outbound", "ConfigBackup", "certificates"}
 
-table_service = TableServiceClient.from_connection_string(AZURE_AUDIT_CONN_STRING)
-table_client = table_service.get_table_client(AUDIT_TABLE_NAME)
+# Create logs directory if it doesn't exist
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+
+# Deleted item logger
+deleted_logger = logging.getLogger("deleted_logger")
+deleted_logger.setLevel(logging.INFO)
+deleted_handler = logging.FileHandler(os.path.join(log_dir, "deleted.log"))
+deleted_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+deleted_logger.addHandler(deleted_handler)
+
+# Dry run item logger
+dryrun_logger = logging.getLogger("dryrun_logger")
+dryrun_logger.setLevel(logging.INFO)
+dryrun_handler = logging.FileHandler(os.path.join(log_dir, "dryrun.log"))
+dryrun_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+dryrun_logger.addHandler(dryrun_handler)
 
 def ensure_table_exists():
-    try:
-        table_client.create_table()
-    except:
-        pass
-
-ensure_table_exists()
+    deleted_logger.info("✅ Local deleted log initialized at logs/deleted.log")
+    dryrun_logger.info("✅ Local dry-run log initialized at logs/dryrun.log")
 
 def log_deletion(share_name, item_path, item_type):
-    table_client.create_entity({
-        "PartitionKey": share_name,
-        "RowKey": str(uuid.uuid4()),
-        "ItemPath": item_path,
-        "ItemType": item_type,
-        "DeletedAt": datetime.utcnow().isoformat()
-    })
+    try:
+        deleted_at = datetime.now(timezone.utc).isoformat()
+        deleted_logger.info(f"Deleted {item_type}: {item_path} from share '{share_name}' at {deleted_at}")
+    except Exception as e:
+        deleted_logger.error(f"❌ Failed to log deletion for {item_path}", exc_info=True)
+
+def log_dryrun_candidate(share_name, item_path, item_type):
+    try:
+        evaluated_at = datetime.now(timezone.utc).isoformat()
+        dryrun_logger.info(f"[DRYRUN] {item_type} would be deleted: {item_path} from share '{share_name}' at {evaluated_at}")
+    except Exception as e:
+        dryrun_logger.error(f"❌ Failed to log dry-run candidate for {item_path}", exc_info=True)
 
 def is_excluded(path):
     return any(
@@ -32,10 +48,8 @@ def is_excluded(path):
     )
 
 def is_date_dir(name):
-    from datetime import datetime, timedelta
-    import re
     try:
         parsed_date = datetime.strptime(name, "%Y-%m-%d")
-        return parsed_date < datetime.utcnow() - timedelta(days=30)
+        return parsed_date.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
     except ValueError:
         return False

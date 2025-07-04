@@ -1,4 +1,4 @@
 flask
-azure-storage-fileshare
+azure-storage-file-share
 azure-data-tables
 python-dotenv
