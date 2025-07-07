@@ -1,45 +1,46 @@
-import os
-from datetime import datetime, timedelta, timezone
-from config import RETENTION_DAYS
 import logging
+from datetime import datetime, timedelta, timezone
+import os
 
 EXCLUDED_DIRS = {"Outbound", "ConfigBackup", "certificates"}
+RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", 30))
 
-# Create logs directory if it doesn't exist
-log_dir = "logs"
-os.makedirs(log_dir, exist_ok=True)
+# Ensure base log directories exist
+os.makedirs("logs/deleted", exist_ok=True)
+os.makedirs("logs/dryrun", exist_ok=True)
 
-# Deleted item logger
-deleted_logger = logging.getLogger("deleted_logger")
-deleted_logger.setLevel(logging.INFO)
-deleted_handler = logging.FileHandler(os.path.join(log_dir, "deleted.log"))
-deleted_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-deleted_logger.addHandler(deleted_handler)
+# Cache for loggers per share name
+_deleted_loggers = {}
+_dryrun_loggers = {}
 
-# Dry run item logger
-dryrun_logger = logging.getLogger("dryrun_logger")
-dryrun_logger.setLevel(logging.INFO)
-dryrun_handler = logging.FileHandler(os.path.join(log_dir, "dryrun.log"))
-dryrun_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-dryrun_logger.addHandler(dryrun_handler)
-
-def ensure_table_exists():
-    deleted_logger.info("✅ Local deleted log initialized at logs/deleted.log")
-    dryrun_logger.info("✅ Local dry-run log initialized at logs/dryrun.log")
+def get_logger(logger_dict, base_dir, share_name, prefix):
+    if share_name not in logger_dict:
+        logger = logging.getLogger(f"{prefix}_{share_name}")
+        logger.setLevel(logging.INFO)
+        log_path = os.path.join("logs", base_dir, f"{share_name}.log")
+        handler = logging.FileHandler(log_path)
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+        logger.addHandler(handler)
+        logger_dict[share_name] = logger
+    return logger_dict[share_name]
 
 def log_deletion(share_name, item_path, item_type):
     try:
         deleted_at = datetime.now(timezone.utc).isoformat()
-        deleted_logger.info(f"Deleted {item_type}: {item_path} from share '{share_name}' at {deleted_at}")
+        logger = get_logger(_deleted_loggers, "deleted", share_name, "deleted")
+        logger.info(f"Deleted {item_type}: {item_path} at {deleted_at}")
     except Exception as e:
-        deleted_logger.error(f"❌ Failed to log deletion for {item_path}", exc_info=True)
+        logger = get_logger(_deleted_loggers, "deleted", share_name, "deleted")
+        logger.error(f"❌ Failed to log deletion for {item_path}", exc_info=True)
 
 def log_dryrun_candidate(share_name, item_path, item_type):
     try:
         evaluated_at = datetime.now(timezone.utc).isoformat()
-        dryrun_logger.info(f"[DRYRUN] {item_type} would be deleted: {item_path} from share '{share_name}' at {evaluated_at}")
+        logger = get_logger(_dryrun_loggers, "dryrun", share_name, "dryrun")
+        logger.info(f"[DRYRUN] {item_type} would be deleted: {item_path} at {evaluated_at}")
     except Exception as e:
-        dryrun_logger.error(f"❌ Failed to log dry-run candidate for {item_path}", exc_info=True)
+        logger = get_logger(_dryrun_loggers, "dryrun", share_name, "dryrun")
+        logger.error(f"❌ Failed to log dry-run candidate for {item_path}", exc_info=True)
 
 def is_excluded(path):
     return any(
@@ -47,9 +48,10 @@ def is_excluded(path):
         for part in path.strip("/").split("/")
     )
 
-def is_date_dir(name):
+def is_date_dir(name, now=None):
     try:
         parsed_date = datetime.strptime(name, "%Y-%m-%d")
-        return parsed_date.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+        now = now or datetime.now(timezone.utc)
+        return parsed_date.replace(tzinfo=timezone.utc) < now - timedelta(days=RETENTION_DAYS)
     except ValueError:
         return False

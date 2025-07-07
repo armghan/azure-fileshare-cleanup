@@ -1,7 +1,6 @@
 from azure.storage.fileshare import ShareServiceClient
 from datetime import datetime, timedelta, timezone
-from config import AZURE_FILES_CONN_STRING
-from config import RETENTION_DAYS
+from config import AZURE_FILES_CONN_STRING, RETENTION_DAYS
 from dryrun_tracker import update_dryrun_progress
 from audit_logger import is_excluded, is_date_dir, log_dryrun_candidate
 import logging
@@ -26,8 +25,9 @@ def dryrun_file_share(job_id, share_name):
                     continue
 
                 if item["is_directory"]:
-                    if is_date_dir(item["name"]):
+                    if is_date_dir(item["name"], now):
                         log_dryrun_candidate(share_name, full_path, "Directory")
+                        logger.info(f"[DryRun] Directory candidate: {full_path}")
                         continue
                     walk(share_client.get_directory_client(full_path), full_path)
                 else:
@@ -36,12 +36,13 @@ def dryrun_file_share(job_id, share_name):
                     processed += 1
                     if props["last_modified"] < now - timedelta(days=RETENTION_DAYS):
                         log_dryrun_candidate(share_name, full_path, "File")
+                        logger.info(f"[DryRun] File candidate: {full_path}")
 
                 if processed % 10 == 0:
-                    update_dryrun_progress(job_id, progress=(processed % 100), scanned=processed)
+                    update_dryrun_progress(job_id, progress=(processed % 100), processed=processed)
 
         walk(share_client.get_directory_client(""))
-        update_dryrun_progress(job_id, status="completed", progress=100, scanned=processed)
+        update_dryrun_progress(job_id, status="completed", progress=100, processed=processed)
     except Exception as e:
         logger.error(f"DryRun failed for job {job_id}", exc_info=True)
         update_dryrun_progress(job_id, status=f"failed: {str(e)}")
