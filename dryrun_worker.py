@@ -39,10 +39,10 @@ def dryrun_file_share(job_id, share_name):
                         logger.info(f"[DryRun] File candidate: {full_path}")
 
                 if processed % 10 == 0:
-                    update_dryrun_progress(job_id, progress=(processed % 100), processed=processed)
+                    update_dryrun_progress(job_id, progress=(processed % 100), scanned=processed)
 
         walk(share_client.get_directory_client(""))
-        update_dryrun_progress(job_id, status="completed", progress=100, processed=processed)
+        update_dryrun_progress(job_id, status="completed", progress=100, scanned=processed)
     except Exception as e:
         logger.error(f"DryRun failed for job {job_id}", exc_info=True)
         update_dryrun_progress(job_id, status=f"failed: {str(e)}")

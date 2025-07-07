@@ -5,21 +5,25 @@ import os
 from dotenv import load_dotenv
 import logging
 
+# Load environment variables
 load_dotenv()
 
 AZURE_TABLE_CONN_STRING = os.getenv("AZURE_TABLE_CONN_STRING")
-DRYRUN_TABLE_NAME = os.getenv("DRYRUN_TABLE_NAME", "DryRunJobs")
+DRYRUN_TABLE_NAME = os.getenv("DRYRUN_TABLE_NAME", "DryRunJobTracking")
 
 logger = logging.getLogger(__name__)
 
-# Initialize Table Service and create table if it doesn't exist
+# Initialize Table Client
 try:
     table_service = TableServiceClient.from_connection_string(AZURE_TABLE_CONN_STRING)
-    table_service.create_table_if_not_exists(DRYRUN_TABLE_NAME)
     table_client = table_service.get_table_client(DRYRUN_TABLE_NAME)
-    logger.info(f"✅ Connected to dry-run table: {DRYRUN_TABLE_NAME}")
+    try:
+        table_service.create_table(DRYRUN_TABLE_NAME)
+        logger.info(f"✅ Table '{DRYRUN_TABLE_NAME}' created.")
+    except Exception:
+        logger.info(f"ℹ️ Table '{DRYRUN_TABLE_NAME}' already exists.")
 except Exception as e:
-    logger.error(f"❌ Could not connect to or create table '{DRYRUN_TABLE_NAME}'", exc_info=True)
+    logger.error(f"❌ Could not connect or create table '{DRYRUN_TABLE_NAME}'", exc_info=True)
     table_client = None
 
 def create_dryrun_job():
@@ -54,7 +58,8 @@ def update_dryrun_progress(job_id, status=None, progress=None, scanned=None):
         if scanned is not None:
             entity["scanned"] = scanned
         entity["updatedAt"] = datetime.now(timezone.utc).isoformat()
-        table_client.update_entity(entity, mode="Merge")
+        table_client.update_entity(entity, mode="replace")  # Use 'replace' instead of 'merge'
+        logger.debug(f"✅ Updated dry-run job {job_id}: status={status}, progress={progress}, scanned={scanned}")
     except Exception as e:
         logger.error(f"❌ Failed to update dry-run job {job_id}", exc_info=True)
 
@@ -69,6 +74,6 @@ def get_dryrun_progress(job_id):
             "scanned": entity.get("scanned", 0),
             "status": entity.get("status", "unknown")
         }
-    except Exception:
+    except Exception as e:
         logger.warning(f"⚠️ Dry-run job not found: {job_id}")
         return {"error": "Invalid dry-run job ID"}

@@ -5,21 +5,25 @@ import os
 from dotenv import load_dotenv
 import logging
 
+# Load environment variables
 load_dotenv()
 
 AZURE_TABLE_CONN_STRING = os.getenv("AZURE_TABLE_CONN_STRING")
-CLEANUP_TABLE_NAME = os.getenv("CLEANUP_TABLE_NAME", "CleanupJobs")
+CLEANUP_TABLE_NAME = os.getenv("CLEANUP_TABLE_NAME", "CleanupJobTracking")
 
 logger = logging.getLogger(__name__)
 
-# Initialize Table Service and create table if it doesn't exist
+# Initialize Table Client
 try:
     table_service = TableServiceClient.from_connection_string(AZURE_TABLE_CONN_STRING)
-    table_service.create_table_if_not_exists(CLEANUP_TABLE_NAME)
     table_client = table_service.get_table_client(CLEANUP_TABLE_NAME)
-    logger.info(f"✅ Connected to cleanup table: {CLEANUP_TABLE_NAME}")
+    try:
+        table_service.create_table(CLEANUP_TABLE_NAME)
+        logger.info(f"✅ Table '{CLEANUP_TABLE_NAME}' created.")
+    except Exception:
+        logger.info(f"ℹ️ Table '{CLEANUP_TABLE_NAME}' already exists.")
 except Exception as e:
-    logger.error(f"❌ Could not connect to or create table '{CLEANUP_TABLE_NAME}'", exc_info=True)
+    logger.error(f"❌ Could not connect or create table '{CLEANUP_TABLE_NAME}'", exc_info=True)
     table_client = None
 
 def create_job():
@@ -54,7 +58,8 @@ def update_progress(job_id, status=None, progress=None, deleted=None):
         if deleted is not None:
             entity["deleted"] = deleted
         entity["updatedAt"] = datetime.now(timezone.utc).isoformat()
-        table_client.update_entity(entity, mode="merge")
+        table_client.update_entity(entity, mode="replace")  # 'replace' instead of 'merge'
+        logger.debug(f"✅ Updated cleanup job {job_id}: status={status}, progress={progress}, deleted={deleted}")
     except Exception as e:
         logger.error(f"❌ Failed to update cleanup job {job_id}", exc_info=True)
 
@@ -69,6 +74,6 @@ def get_progress(job_id):
             "deleted": entity.get("deleted", 0),
             "status": entity.get("status", "unknown")
         }
-    except Exception:
+    except Exception as e:
         logger.warning(f"⚠️ Cleanup job not found: {job_id}")
         return {"error": "Invalid job ID"}
