@@ -1,174 +1,164 @@
-# Azure Fileshare Cleanup API
+```markdown
+# Azure File Share Cleanup Monitor
 
-This project provides a Flask-based REST API to **list or delete old files and directories** in an Azure File Share that are older than a configurable retention period. It supports both **dry-run** (preview) and actual deletion, with **logging and progress tracking**.
-
----
-
-## 🔧 Features
-
-* Cleanup files/directories older than `RETENTION_DAYS` (default: 30)
-* Dry-run mode to preview what would be deleted
-* Separate log files for:
-
-  * Deleted items (`logs/deleted.log`)
-  * Dry-run candidates (`logs/dryrun.log`)
-* Asynchronous background processing
-* Simple job tracking via `/progress` endpoints
-* Configurable log level and retention using `.env`
+This project is a scheduled cleanup utility designed for Kubernetes PVCs backed by Azure File Shares. It reads PVC metadata from Azure Table Storage, evaluates cleanup eligibility based on schedule intervals, and removes files or folders older than a configured retention period.
 
 ---
 
-## 📁 Directory Structure
+## 🚀 Features
+
+- Cleans Azure File Share contents based on age.
+- Skips excluded folders or folders containing "config" (case-insensitive).
+- Deletes empty date-named folders (e.g., `2025-07-01`) if older than retention.
+- Stores cleanup job status in Azure Table Storage.
+- Periodically monitors PVCs and schedules cleanups.
+- Logs activity to both console and rotating log file.
+- Built-in progress tracking (`CleanupJobTracking` table).
+
+---
+
+## 📁 Project Structure
 
 ```
-python-cleanup-api/
-│
-├── app.py
-├── cleanup_worker.py
-├── dryrun_worker.py
-├── audit_logger.py
-├── config.py
-├── dryrun_tracker.py
-├── progress_tracker.py
-├── requirements.txt
-├── .env
-├── .gitignore
-├── README.md
-└── logs/
-    ├── deleted.log
-    └── dryrun.log
-```
+
+azure-fileshare-cleanup/
+├── cleanup_worker.py         # Core cleanup logic
+├── pvc_monitor.py            # Scheduler and monitoring loop
+├── progress_tracker.py       # Tracks job progress in Azure Table
+├── storage_table.py          # Table operations and storage connections
+├── logger.py                 # Reusable logger configuration
+├── .env                      # Configuration file
+└── README.md                 # You're here
+
+````
 
 ---
 
-## 📦 Setup
+## ⚙️ Configuration (.env)
+
+Create a `.env` file in the project root:
+
+```env
+# Azure Tables
+AZURE_TABLE_CONN_STRING=DefaultEndpointsProtocol=...;AccountKey=...
+
+# Cleanup logic
+RETENTION_DAYS=30
+EXCLUDE_DIRS=backups,temp,ignorethis
+MONITOR_INTERVAL_HOURS=1
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FILE=cleanup.log
+LOG_MAX_BYTES=5242880
+LOG_BACKUP_COUNT=3
+````
+
+---
+
+## 🧪 How It Works
+
+1. **PVC Monitoring**
+
+   * `pvc_monitor.py` reads PVCs from the `PVCMetadata` table.
+   * Determines if cleanup should run by comparing `last_run + schedule_hours`.
+   * If no existing job found, creates tracking entry.
+
+2. **Cleanup Execution**
+
+   * `cleanup_worker.py` walks the Azure File Share recursively.
+   * Deletes:
+
+     * Files older than `RETENTION_DAYS`.
+     * Date-named folders (e.g. `2024-10-12`) older than retention period (after emptying).
+   * Skips:
+
+     * Paths listed in `EXCLUDE_DIRS`.
+     * Any directory or file containing `config` (case-insensitive).
+
+3. **Tracking**
+
+   * Job metadata is written to `CleanupJobTracking` Azure Table.
+   * Fields include `start_time`, `last_update`, `status`, `deleted`, `failed`, etc.
+
+---
+
+## 📝 Azure Table Schema
+
+* **PVCMetadata**
+
+  * `PartitionKey`: usually `pvc`
+  * `RowKey`: unique PVC ID
+  * `share_name`: Azure File Share name
+  * `storage_account`: Name of the Azure Storage Account
+  * `schedule_hours`: Interval (in hours) between cleanup runs
+
+* **CleanupJobTracking**
+
+  * `PartitionKey`: `cleanup`
+  * `RowKey`: `share_name`
+  * `status`: `Scheduled`, `Running`, `Completed`, `Failed`
+  * `start_time`, `last_update`, `message`, `processed`, `deleted`, `failed`
+
+---
+
+## 🛠️ Running the Monitor
 
 ```bash
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
+python pvc_monitor.py
+```
 
-# Install dependencies
+Logs will appear in the terminal and the `cleanup.log` file (with rotation enabled).
+
+---
+
+## 🧼 Example Output
+
+```
+2025-07-19 04:00:00,123 [INFO] 📡 PVC Monitor started
+2025-07-19 04:00:02,456 [INFO] 🔍 Found 2 PVCs to check
+2025-07-19 04:00:04,789 [INFO] 🔐 Retrieved connection string for storage account: devops-aks
+2025-07-19 04:00:05,001 [INFO] ⏱ Scheduling cleanup for share: pvc-123abc
+2025-07-19 04:00:05,234 [INFO] 🧹 Starting cleanup for share: pvc-123abc
+2025-07-19 04:00:07,890 [INFO] 🗑 Deleted old file: archive/report.txt (45 days old)
+```
+
+---
+
+## ✅ Requirements
+
+* Python 3.8+
+* Azure Storage Tables and File Shares
+* Tables: `PVCMetadata`, `CleanupJobTracking`
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
 ---
 
-## ⚙️ .env Configuration
+## 📦 Future Enhancements
 
-Create a `.env` file in the root directory:
-
-```
-AZURE_FILES_CONN_STRING=your-fileshare-connection-string
-LOG_LEVEL=INFO
-RETENTION_DAYS=30
-```
-
-* `AZURE_FILES_CONN_STRING`: Connection string to your Azure File Share storage account.
-* `LOG_LEVEL`: `DEBUG`, `INFO`, `WARNING`, `ERROR`
-* `RETENTION_DAYS`: Number of days to retain files/directories. Older data will be deleted.
+* Email or webhook notifications on failure
+* Dashboard or CLI status viewer
+* Integration with Kubernetes API for dynamic PVC discovery
 
 ---
 
-## 🚀 Running the API
+## 👨‍💻 Maintainer
 
-```bash
-python app.py
-```
-
-Default port is `5000`.
+**Armughan Bhutta**
+For support or suggestions, please raise an issue or contact directly.
 
 ---
 
-## 📡 API Endpoints
+## 📜 License
 
-### 1. Start Cleanup
+MIT License
 
-```bash
-curl -X POST http://localhost:5000/start-cleanup/fileshare \
-  -H "Content-Type: application/json" \
-  -d '{"share_name": "your-fileshare-name"}'
 ```
 
-**Response**:
-
-```json
-{ "job_id": "xxx-yyy-zzz" }
+Let me know if you'd like a `requirements.txt` or `.env.example` as well.
 ```
-
----
-
-### 2. Start Dry Run
-
-```bash
-curl -X POST http://localhost:5000/dry-run/fileshare \
-  -H "Content-Type: application/json" \
-  -d '{"share_name": "your-fileshare-name"}'
-```
-
-**Response**:
-
-```json
-{ "job_id": "xxx-yyy-zzz", "message": "Dry run started" }
-```
-
----
-
-### 3. Check Cleanup Progress
-
-```bash
-curl http://localhost:5000/progress/<job_id>
-```
-
-**Response**:
-
-```json
-{ "progress": 80, "deleted": 120, "status": "pending" }
-```
-
----
-
-### 4. Check Dry Run Progress
-
-```bash
-curl http://localhost:5000/dry-run/progress/<job_id>
-```
-
-**Response**:
-
-```json
-{ "progress": 90, "total_candidates": 145, "status": "pending" }
-```
-
----
-
-## 📜 Logs
-
-* `logs/deleted.log`: Contains entries of actually deleted items.
-* `logs/dryrun.log`: Contains dry-run candidate items (what would be deleted).
-* Console logs are controlled using `.env` variable `LOG_LEVEL`.
-
----
-
-## ✅ Example Use Case
-
-* Identify and clean up Azure File Share structures that are older than N days.
-* Use dry-run to simulate and verify deletions.
-* Track all deletions and dry-run evaluations via log files.
-
----
-
-## 🧪 Tested With
-
-* Python 3.8+
-* `azure-storage-file-share`
-* Flask 3.x
-
----
-
-## 🛠 Notes
-
-* No data is deleted in dry-run mode.
-* App runs non-blocking jobs in background using Python threads.
-
----

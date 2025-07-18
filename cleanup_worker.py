@@ -1,55 +1,99 @@
+import os
+import re
+from dotenv import load_dotenv
 from azure.storage.fileshare import ShareServiceClient
-from datetime import datetime, timedelta, timezone
-from config import AZURE_FILES_CONN_STRING, RETENTION_DAYS
 from progress_tracker import update_progress
-from audit_logger import is_excluded, is_date_dir
-import logging
+from datetime import datetime, timezone
+from logger import get_logger  # ✅ Custom logger
 
-logger = logging.getLogger(__name__)
+# Load env and config
+load_dotenv()
+logger = get_logger("cleanup_worker")
 
-def cleanup_file_share(job_id, share_name):
+RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", 30))
+EXCLUDE_DIRS = [d.strip().lower() for d in os.getenv("EXCLUDE_DIRS", "").split(",") if d.strip()]
+
+def should_exclude(path):
+    """Check if path should be excluded based on EXCLUDE_DIRS or contains 'config'."""
+    path_lower = path.lower()
+    if "config" in path_lower:
+        return True
+    return any(path_lower.startswith(excl) for excl in EXCLUDE_DIRS)
+
+def is_date_folder(name):
+    """Check if folder name matches YYYY-MM-DD format."""
+    return re.match(r"\d{4}-\d{2}-\d{2}$", name)
+
+def cleanup_file_share(job_id, conn_str, share_name):
     try:
-        client = ShareServiceClient.from_connection_string(AZURE_FILES_CONN_STRING)
+        logger.info(f"🧹 Starting cleanup for share: {share_name}")
+        client = ShareServiceClient.from_connection_string(conn_str)
         share_client = client.get_share_client(share_name)
-        now = datetime.now(timezone.utc)
-        deleted = 0
 
-        def walk(dir_client, path=""):
-            nonlocal deleted
-            items = list(dir_client.list_directories_and_files())
+        total_processed = total_deleted = total_failed = 0
+
+        def walk_and_clean(dir_path=""):
+            nonlocal total_processed, total_deleted, total_failed
+
+            items = list(share_client.list_directories_and_files(directory_name=dir_path))
 
             for item in items:
-                full_path = f"{path}/{item['name']}".strip("/")
+                item_path = f"{dir_path}/{item.name}" if dir_path else item.name
 
-                if is_excluded(full_path):
+                if should_exclude(item_path):
+                    logger.info(f"⏩ Skipping excluded path: {item_path}")
                     continue
 
-                if item["is_directory"]:
-                    if is_date_dir(item["name"], now):
-                        try:
-                            share_client.get_directory_client(full_path).delete_directory()
-                            logger.info(f"[Cleanup] Deleted directory: {full_path}")
-                            deleted += 1
-                        except Exception as e:
-                            logger.warning(f"[Cleanup] Failed to delete directory: {full_path} - {str(e)}")
-                        continue
-                    walk(share_client.get_directory_client(full_path), full_path)
-                else:
-                    file_client = share_client.get_file_client(full_path)
-                    props = file_client.get_file_properties()
-                    if props["last_modified"] < now - timedelta(days=RETENTION_DAYS):
-                        try:
+                try:
+                    if item.is_directory:
+                        # Always recurse into subdirectory
+                        logger.info(f"📂 Scanning directory: {item_path}")
+                        walk_and_clean(item_path)
+
+                        # If it's a date folder and old enough, attempt delete after cleaning
+                        if is_date_folder(item.name):
+                            dir_props = share_client.get_directory_client(item_path).get_directory_properties()
+                            last_modified = dir_props['last_modified']
+                            now = datetime.now(timezone.utc)
+                            age_days = (now - last_modified).days
+
+                            if age_days > RETENTION_DAYS:
+                                try:
+                                    share_client.delete_directory(item_path)
+                                    logger.info(f"🗑 Deleted old date folder: {item_path} ({age_days} days old)")
+                                    total_deleted += 1
+                                except Exception as e:
+                                    logger.warning(f"⚠️ Failed to delete folder {item_path} after cleanup: {e}")
+                                    total_failed += 1
+
+                    else:
+                        file_client = share_client.get_file_client(item_path)
+                        props = file_client.get_file_properties()
+                        last_modified = props['last_modified']
+                        now = datetime.now(timezone.utc)
+                        age_days = (now - last_modified).days
+
+                        total_processed += 1
+                        if age_days > RETENTION_DAYS:
                             file_client.delete_file()
-                            logger.info(f"[Cleanup] Deleted file: {full_path}")
-                            deleted += 1
-                        except Exception as e:
-                            logger.warning(f"[Cleanup] Failed to delete file: {full_path} - {str(e)}")
+                            logger.info(f"🗑 Deleted old file: {item_path} ({age_days} days old)")
+                            total_deleted += 1
 
-                if deleted % 10 == 0:
-                    update_progress(job_id, progress=(deleted % 100), deleted=deleted)
+                except Exception as e:
+                    total_failed += 1
+                    logger.warning(f"⚠️ Could not process {item_path}: {e}")
 
-        walk(share_client.get_directory_client(""))
-        update_progress(job_id, status="completed", progress=100, deleted=deleted)
+        walk_and_clean()
+
+        update_progress(
+            job_id=job_id,
+            status="Completed",
+            processed=total_processed,
+            deleted=total_deleted,
+            failed=total_failed,
+            message="Cleanup finished successfully."
+        )
+
     except Exception as e:
-        logger.error(f"Cleanup failed for job {job_id}", exc_info=True)
-        update_progress(job_id, status=f"failed: {str(e)}")
+        logger.exception(f"❌ Error running cleanup for {share_name}")
+        update_progress(job_id, status="Failed", message=str(e))
