@@ -1,4 +1,6 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
 from azure.data.tables import TableServiceClient
 
 # Use a single environment variable for all metadata access

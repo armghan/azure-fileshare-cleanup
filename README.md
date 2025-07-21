@@ -1,4 +1,3 @@
-```markdown
 # Azure File Share Cleanup Monitor
 
 This project is a scheduled cleanup utility designed for Kubernetes PVCs backed by Azure File Shares. It reads PVC metadata from Azure Table Storage, evaluates cleanup eligibility based on schedule intervals, and removes files or folders older than a configured retention period.
@@ -19,7 +18,6 @@ This project is a scheduled cleanup utility designed for Kubernetes PVCs backed 
 
 ## 📁 Project Structure
 
-```
 
 azure-fileshare-cleanup/
 ├── cleanup_worker.py         # Core cleanup logic
